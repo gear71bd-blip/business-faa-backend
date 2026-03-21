@@ -52,14 +52,9 @@ const orderCreateSchema = joi.object(
             "number.min": "Item qty must be at least 1.",
           }),
 
-          color: joi.string().required().messages({
-            "string.empty": "Item color is required.",
-            "any.required": "Item color is required.",
-          }),
-          size: joi.string().required().messages({
-            "string.empty": "Item size is required.",
-            "any.required": "Item size is required.",
-          }),
+          variantId: joi.string().trim().allow(null, "").optional(),
+          color: joi.string().trim().allow(null, "").optional(),
+          size: joi.string().trim().allow(null, "").optional(),
         }),
       )
       .min(1)
@@ -102,5 +97,33 @@ exports.validateCreateOrder = async (req, res, next) => {
         HTTP_STATUS.BAD_REQUEST,
       ),
     );
+  }
+};
+
+// ------------------------
+// UPDATE ORDER STATUS
+// ------------------------
+const updateOrderStatusSchema = joi.object({
+  status: joi
+    .string()
+    .valid("pending", "processing", "confirmed", "shipped", "delivered", "cancelled")
+    .required()
+    .messages({
+      "any.required": "Status is required.",
+      "any.only": "Invalid status.",
+    }),
+});
+
+exports.validateUpdateOrderStatus = async (req, res, next) => {
+  try {
+    const value = await updateOrderStatusSchema.validateAsync(req.body);
+    req.validatedData = value;
+    next();
+  } catch (error) {
+    if (error.details) {
+      const message = error.details.map((err) => err.message).join(", ");
+      return next(new ApiError(message, HTTP_STATUS.BAD_REQUEST));
+    }
+    return next(new ApiError("Validation failed", HTTP_STATUS.BAD_REQUEST));
   }
 };

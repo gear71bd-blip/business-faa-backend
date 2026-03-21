@@ -54,10 +54,7 @@ class createOrderService {
 
           return {
             productId: p._id,
-            name: it.name || p.name,
-            slug: it.slug,
-            image: it.image,
-            price: unitPrice,
+            variantId: it.variantId || null,
             qty,
             color: it.color || null,
             size: it.size || null,
@@ -130,6 +127,19 @@ class createOrderService {
 
   deleteOrder = async (id) => {
     const order = await orderModel.findOneAndDelete({ invoiceId: id });
+
+    if (!order) {
+      throw new ApiError("Order not found", HTTP_STATUS.BAD_REQUEST);
+    }
+
+    return order;
+  };
+  updateOrderStatus = async (id, status) => {
+    const order = await orderModel.findOneAndUpdate(
+      { invoiceId: id },
+      { $set: { status } },
+      { new: true }
+    );
 
     if (!order) {
       throw new ApiError("Order not found", HTTP_STATUS.BAD_REQUEST);

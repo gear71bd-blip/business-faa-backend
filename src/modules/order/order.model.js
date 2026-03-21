@@ -5,8 +5,11 @@ const orderItemSchema = new mongoose.Schema(
     productId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Product",
-      required: true,
-      index: true,
+      default:null,
+    },
+    variantId:{
+      type: mongoose.Schema.Types.ObjectId,
+      default:null,
     },
 
     qty: { type: Number, required: true, min: 1 },

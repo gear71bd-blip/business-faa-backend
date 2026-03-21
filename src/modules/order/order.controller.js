@@ -27,6 +27,10 @@ class orderController {
       query.invoiceId = req.query.invoiceId;
     }
 
+    if (req.query.status) {
+      query.status = req.query.status;
+    }
+
     const suffix = JSON.stringify({ query });
     const cacheKey = await buildCacheKey("order", suffix);
 
@@ -61,6 +65,23 @@ class orderController {
     await bumpNsVersion("order");
 
     ApiResponse.success(res, HTTP_STATUS.OK, "Order deleted", order);
+  });
+
+  updateOrderStatus = asyncHandler(async (req, res) => {
+    if (!req.params.invoiceId) {
+      throw new ApiError(
+        "Order invoiceId is required",
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+
+    const { status } = req.validatedData;
+    const order = await orderService.updateOrderStatus(req.params.invoiceId, status);
+
+    // invalidate order cache
+    await bumpNsVersion("order");
+
+    ApiResponse.success(res, HTTP_STATUS.OK, "Order status updated", order);
   });
 }
 
