@@ -3,13 +3,59 @@ const { ApiError } = require("@/shared/utils/apiError.utils");
 const mongoose = require("mongoose");
 const slugify = require("slugify");
 
+// ── Variant sub-schema ────────────────────────────────────────────────────────
+const variantSchema = new mongoose.Schema(
+  {
+    // Identification
+    sku: { type: String, default: "", trim: true },
+
+    // Attributes
+    color: { type: String, required: true, trim: true },  // required
+    size: { type: String, required: true, trim: true },   // required
+    material: { type: String, default: "", trim: true },
+    weight: { type: Number, default: 0 },
+
+    // Pricing
+    price: { type: Number, default: 0 },
+    discountType: {
+      type: String,
+      enum: ["percentage", "fixed", null],
+      default: null,
+    },
+    discountValue: { type: Number, default: 0 },
+    finalPrice: { type: Number, default: 0 },            // auto-calculated
+
+    // Stock
+    stock: { type: Number, default: 0 },
+    inStock: { type: Boolean, default: true },
+
+    isActive: { type: Boolean, default: true },
+  },
+  { _id: true }, // each variant gets its own _id for easy lookup/update
+);
+
+// auto-calculate variant finalPrice before save
+variantSchema.pre("save", function () {
+  if (this.discountType === "percentage") {
+    this.finalPrice = Math.round(
+      this.price - (this.price * this.discountValue) / 100,
+    );
+  } else if (this.discountType === "fixed") {
+    this.finalPrice = Math.round(this.price - this.discountValue);
+  } else {
+    this.finalPrice = Math.round(this.price);
+  }
+  this.inStock = this.stock > 0;
+});
+
+// ── Product schema ────────────────────────────────────────────────────────────
 const productSchema = new mongoose.Schema(
   {
     // Basic Info
     name: { type: String, required: true, trim: true },
     slug: { type: String, unique: true, index: true },
 
-    brand: { type: String, default: "" }, // Legacy
+    brand: { type: String, default: "" }, // Legacy plain text
     sku: { type: String, required: true },
     color: [{ type: String, default: "", required: true }],
     size: [{ type: String, default: "" }],
@@ -17,14 +63,24 @@ const productSchema = new mongoose.Schema(
     shortDescription: { type: String, default: "" },
     description: { type: String, default: "", required: true },
 
-    // Category relation
+    // Relations
     category: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Category",
       required: true,
     },
+    subcategory: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "SubCategory",
+      default: null,
+    },
+    brandRef: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Brand",
+      default: null,
+    },
 
-    // Pricing
+    // Base Pricing (used when no variants, or as default)
     price: { type: Number, default: 0, required: [true, "Price is required"] },
     discountType: {
       type: String,
@@ -32,11 +88,15 @@ const productSchema = new mongoose.Schema(
       default: null,
     },
     discountValue: { type: Number, default: 0 },
-    finalPrice: { type: Number, default: 0 }, // calculated
+    finalPrice: { type: Number, default: 0 },
 
-    // Stock
+    // Base Stock (used when no variants)
     stock: { type: Number, default: 0, required: [true, "Stock is required"] },
     inStock: { type: Boolean, default: true },
+
+    // ── Variants ──────────────────────────────────────────────────────────────
+    variants: { type: [variantSchema], default: [] },
+    hasVariants: { type: Boolean, default: false }, // true when variants.length > 0
 
     // Rating
     rating: {
@@ -46,12 +106,13 @@ const productSchema = new mongoose.Schema(
     },
     totalReviews: { type: Number, default: 0 },
 
-    // Badges (NEW, SALE etc)
+    // Badges
     isNew: { type: Boolean, default: true },
     isSale: { type: Boolean, default: false },
     isLimited: { type: Boolean, default: false },
     isHot: { type: Boolean, default: false },
 
+    // Product-level images
     image: [
       {
         url: { type: String, default: "" },

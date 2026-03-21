@@ -6,207 +6,149 @@ const ProductService = require("@/modules/product/product.service");
 const {
   getCache,
   setCache,
-  deleteCache,
-  getNsVersion,
   bumpNsVersion,
   buildCacheKey,
 } = require("@/shared/utils/cache.util");
 
-class productController {
+class ProductController {
+  // ── Create product ────────────────────────────────────────────────────────
   createProduct = asyncHandler(async (req, res) => {
     const product = await ProductService.createProduct(req.validatedData);
-
-    // cache invalidate
     await bumpNsVersion("product");
-
-    ApiResponse.success(
-      res,
-      HTTP_STATUS.CREATED,
-      "Product created",
-      product.name,
-    );
+    ApiResponse.success(res, HTTP_STATUS.CREATED, "Product created", product.name);
   });
 
+  // ── Get products (with filters, sort, cache) ──────────────────────────────
   getProducts = asyncHandler(async (req, res) => {
     const {
-      category,
-      minPrice,
-      maxPrice,
-      color,
-      inStock,
-      outOfStock,
-      rating,
-      highToLow,
-      lowToHigh,
-      newest,
-      isLimited,
-      name,
-      slug,
-      oldest,
-      isBestSelling,
+      category, subcategory, brandRef,
+      minPrice, maxPrice,
+      color, inStock, outOfStock,
+      rating, highToLow, lowToHigh,
+      newest, oldest, isLimited,
+      name, slug, isBestSelling, hasVariants,
     } = req.query;
 
     let filter = {};
     let sort = {};
 
-    // -------- SORTING --------
+    // ── Sorting ──
     if (highToLow) sort.price = -1;
     else if (lowToHigh) sort.price = 1;
-
     if (newest) sort.createdAt = -1;
     else if (oldest) sort.createdAt = 1;
 
-    // -------- FILTERING --------
-
-    // Category
+    // ── Filtering ──
     if (category) filter.category = category;
+    if (subcategory) filter.subcategory = subcategory;
+    if (brandRef) filter.brandRef = brandRef;
 
-    // Price Range
     if (minPrice || maxPrice) {
       filter.price = {};
       if (minPrice) filter.price.$gte = Number(minPrice);
       if (maxPrice) filter.price.$lte = Number(maxPrice);
     }
 
-    // Color
     if (color) {
       const colors = Array.isArray(color) ? color : [color];
       filter.color = { $in: colors };
     }
 
-    // Stock
     if (inStock) filter.stock = { $gt: 0 };
     if (outOfStock) filter.stock = { $eq: 0 };
+    if (isLimited !== undefined) filter.isLimited = isLimited === "true";
+    if (isBestSelling !== undefined) filter.isBestSelling = isBestSelling === "true";
+    if (hasVariants !== undefined) filter.hasVariants = hasVariants === "true";
+    if (rating) filter.rating = { $eq: Number(rating) };
+    if (name) filter.name = { $regex: name, $options: "i" };
+    if (slug) filter.slug = slug;
 
-    // Limited
-    if (isLimited !== undefined) {
-      filter.isLimited = isLimited === "true";
+    // ── Cache ──
+    const cacheKey = await buildCacheKey("product", JSON.stringify({ filter, sort }));
+    const cached = await getCache(cacheKey);
+    if (cached) {
+      return ApiResponse.success(res, HTTP_STATUS.OK, "Products fetched from cache", cached);
     }
 
-    // Rating
-    if (rating) {
-      filter.rating = { $eq: Number(rating) };
-    }
-
-    // Name Search
-    if (name) {
-      filter.name = { $regex: name, $options: "i" };
-    }
-
-    // Slug
-    if (slug) {
-      filter.slug = slug;
-    }
-
-    // Best Selling
-    if (isBestSelling !== undefined) {
-      filter.isBestSelling = isBestSelling === "true";
-    }
-
-    // -------- CACHE KEY BUILD --------
-    const cachePayload = {
-      filter,
-      sort,
-    };
-
-    const suffix = JSON.stringify(cachePayload);
-    const cacheKey = await buildCacheKey("product", suffix);
-
-    // try cache
-    const cachedProducts = await getCache(cacheKey);
-    if (cachedProducts) {
-      return ApiResponse.success(
-        res,
-        HTTP_STATUS.OK,
-        "Products fetched from cache",
-        cachedProducts,
-      );
-    }
-
-    // db hit
     const products = await ProductService.getProducts(filter, sort);
-
-    // set cache (ttl 5 minutes)
     await setCache(cacheKey, products, 300);
-
     ApiResponse.success(res, HTTP_STATUS.OK, "Products fetched", products);
   });
 
+  // ── Update product info ───────────────────────────────────────────────────
   updateProductInfo = asyncHandler(async (req, res) => {
-    if (!req.params.slug) {
+    if (!req.params.slug)
       throw new ApiError("Product slug is required", HTTP_STATUS.BAD_REQUEST);
-    }
 
-    const product = await ProductService.updateProductInfo(
-      req.params.slug,
-      req.body,
-    );
-
-    // cache invalidate
+    const product = await ProductService.updateProductInfo(req.params.slug, req.body);
     await bumpNsVersion("product");
-
-    ApiResponse.success(
-      res,
-      HTTP_STATUS.OK,
-      "Product information updated",
-      product,
-    );
+    ApiResponse.success(res, HTTP_STATUS.OK, "Product information updated", product);
   });
 
+  // ── Add variants ──────────────────────────────────────────────────────────
+  addVariants = asyncHandler(async (req, res) => {
+    if (!req.params.slug)
+      throw new ApiError("Product slug is required", HTTP_STATUS.BAD_REQUEST);
+
+    const product = await ProductService.addVariants(
+      req.params.slug,
+      req.validatedData.variants,
+    );
+    await bumpNsVersion("product");
+    ApiResponse.success(res, HTTP_STATUS.OK, "Variants added", product);
+  });
+
+  // ── Update a single variant ───────────────────────────────────────────────
+  updateVariant = asyncHandler(async (req, res) => {
+    const { slug, variantId } = req.params;
+    if (!slug || !variantId)
+      throw new ApiError("Product slug and variant ID are required", HTTP_STATUS.BAD_REQUEST);
+
+    const product = await ProductService.updateVariant(slug, variantId, req.validatedData);
+    await bumpNsVersion("product");
+    ApiResponse.success(res, HTTP_STATUS.OK, "Variant updated", product);
+  });
+
+  // ── Delete a single variant ───────────────────────────────────────────────
+  deleteVariant = asyncHandler(async (req, res) => {
+    const { slug, variantId } = req.params;
+    if (!slug || !variantId)
+      throw new ApiError("Product slug and variant ID are required", HTTP_STATUS.BAD_REQUEST);
+
+    const product = await ProductService.deleteVariant(slug, variantId);
+    await bumpNsVersion("product");
+    ApiResponse.success(res, HTTP_STATUS.OK, "Variant deleted", product);
+  });
+
+  // ── Delete product image ──────────────────────────────────────────────────
   deleteProductImage = asyncHandler(async (req, res) => {
-    if (!req.params.slug) {
+    if (!req.params.slug)
       throw new ApiError("Product slug is required", HTTP_STATUS.BAD_REQUEST);
-    }
 
-    const product = await ProductService.deletedProductImage(
-      req.params.slug,
-      req.body.publicId,
-    );
-
-    // cache invalidate
+    const product = await ProductService.deletedProductImage(req.params.slug, req.body.publicId);
     await bumpNsVersion("product");
-
-    ApiResponse.success(
-      res,
-      HTTP_STATUS.OK,
-      "Product image deleted",
-      product.name,
-    );
+    ApiResponse.success(res, HTTP_STATUS.OK, "Product image deleted", product.name);
   });
 
+  // ── Upload product image ──────────────────────────────────────────────────
   uploadProductImage = asyncHandler(async (req, res) => {
-    if (!req.params.slug) {
+    if (!req.params.slug)
       throw new ApiError("Product slug is required", HTTP_STATUS.BAD_REQUEST);
-    }
 
-    const product = await ProductService.uploadProductImage(
-      req.params.slug,
-      req.validatedData.image,
-    );
-
-    // cache invalidate
+    const product = await ProductService.uploadProductImage(req.params.slug, req.validatedData.image);
     await bumpNsVersion("product");
-
-    ApiResponse.success(
-      res,
-      HTTP_STATUS.OK,
-      "Product image uploaded",
-      product.name,
-    );
+    ApiResponse.success(res, HTTP_STATUS.OK, "Product image uploaded", product.name);
   });
 
+  // ── Delete product ────────────────────────────────────────────────────────
   deleteProuct = asyncHandler(async (req, res) => {
-    if (!req.params.slug) {
+    if (!req.params.slug)
       throw new ApiError("Product slug is required", HTTP_STATUS.BAD_REQUEST);
-    }
 
     const product = await ProductService.deleteProductService(req.params.slug);
-
-    // cache invalidate
     await bumpNsVersion("product");
-
     ApiResponse.success(res, HTTP_STATUS.OK, "Product deleted", product.name);
   });
 }
 
-module.exports = new productController();
+module.exports = new ProductController();
