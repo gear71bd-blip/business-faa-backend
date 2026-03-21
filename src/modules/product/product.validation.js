@@ -8,14 +8,8 @@ const variantJoiSchema = joi.object({
   sku: joi.string().trim().allow("").optional(),
 
   // Only color and size are required
-  color: joi.string().trim().required().messages({
-    "string.empty": "Variant color is required",
-    "any.required": "Variant color is required",
-  }),
-  size: joi.string().trim().required().messages({
-    "string.empty": "Variant size is required",
-    "any.required": "Variant size is required",
-  }),
+  color: joi.string().trim().allow("").optional(),
+  size: joi.string().trim().allow("").optional(),
   material: joi.string().trim().allow("").optional(),
   weight: joi.number().min(0).optional(),
   price: joi.number().optional(),
@@ -67,36 +61,24 @@ const productSchema = joi.object({
   discountValue: joi.number().min(0).default(0).optional(),
 
   // Base stock
-  stock: joi.number().min(0).required().messages({
+  stock: joi.number().min(0).optional().messages({
     "any.required": "Stock is required",
   }),
-
-  // Top-level color/size (kept for backward compat)
-  color: joi.array().items(joi.string().trim()).min(1).required().messages({
-    "array.min": "At least one color is required",
-    "any.required": "Color is required",
-  }),
-  size: joi.array().items(joi.string().trim()).optional(),
-
-  // Variants — optional array
-  variants: joi.array().items(variantJoiSchema).optional(),
-
-  // Badges / flags
-  isNew: joi.boolean().optional(),
-  isSale: joi.boolean().optional(),
-  isLimited: joi.boolean().optional(),
-  isHot: joi.boolean().optional(),
-  isFeatured: joi.boolean().optional(),
-  isBestSelling: joi.boolean().optional(),
-  isActive: joi.boolean().optional(),
 });
 
 exports.validateProduct = async (req, res, next) => {
   try {
     // 1) Handle variants JSON string if needed
     if (req.body.variants && typeof req.body.variants === "string") {
-      try { req.body.variants = JSON.parse(req.body.variants); } catch {
-        return next(new ApiError("variants must be a valid JSON array", HTTP_STATUS.BAD_REQUEST));
+      try {
+        req.body.variants = JSON.parse(req.body.variants);
+      } catch {
+        return next(
+          new ApiError(
+            "variants must be a valid JSON array",
+            HTTP_STATUS.BAD_REQUEST,
+          ),
+        );
       }
     }
 
@@ -116,17 +98,24 @@ exports.validateProduct = async (req, res, next) => {
       fieldName: "image",
     });
 
-    req.validatedData = { 
-      ...value, 
-      image: images
+    req.validatedData = {
+      ...value,
+      image: images,
     };
     next();
   } catch (error) {
     if (error.details) {
       const message = error.details.map((e) => e.message).join(", ");
-      return next(new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST));
+      return next(
+        new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST),
+      );
     }
-    return next(new ApiError(error.message || "Validation failed", HTTP_STATUS.BAD_REQUEST));
+    return next(
+      new ApiError(
+        error.message || "Validation failed",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
   }
 };
 
@@ -137,7 +126,11 @@ const updateSchema = joi
     shortDescription: joi.string().trim().allow("").optional(),
     description: joi.string().allow("").optional(),
     price: joi.number().optional(),
-    discountType: joi.string().valid("percentage", "fixed").allow(null).optional(),
+    discountType: joi
+      .string()
+      .valid("percentage", "fixed")
+      .allow(null)
+      .optional(),
     discountValue: joi.number().min(0).optional(),
     stock: joi.number().min(0).optional(),
     color: joi.array().items(joi.string().trim()).optional(),
@@ -163,16 +156,23 @@ exports.validateUpdateProduct = async (req, res, next) => {
 
     // 3) Process files from upload.any()
     const allFiles = req.files || [];
-    const productImages = allFiles.filter(f => f.fieldname === "image");
+    const productImages = allFiles.filter((f) => f.fieldname === "image");
 
     req.validatedData = { ...value, image: productImages };
     next();
   } catch (error) {
     if (error.details) {
       const message = error.details.map((e) => e.message).join(", ");
-      return next(new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST));
+      return next(
+        new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST),
+      );
     }
-    return next(new ApiError(error.message || "Validation failed", HTTP_STATUS.BAD_REQUEST));
+    return next(
+      new ApiError(
+        error.message || "Validation failed",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
   }
 };
 
@@ -191,7 +191,12 @@ exports.validateProductImage = async (req, res, next) => {
     req.validatedData = { image: images };
     next();
   } catch (error) {
-    return next(new ApiError(error.message || "Validation failed", HTTP_STATUS.BAD_REQUEST));
+    return next(
+      new ApiError(
+        error.message || "Validation failed",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
   }
 };
 
@@ -202,8 +207,15 @@ exports.validateAddVariant = async (req, res, next) => {
 
     let body = req.body.variants;
     if (typeof body === "string") {
-      try { body = JSON.parse(body); } catch {
-        return next(new ApiError("variants must be a valid JSON array", HTTP_STATUS.BAD_REQUEST));
+      try {
+        body = JSON.parse(body);
+      } catch {
+        return next(
+          new ApiError(
+            "variants must be a valid JSON array",
+            HTTP_STATUS.BAD_REQUEST,
+          ),
+        );
       }
     }
 
@@ -213,9 +225,16 @@ exports.validateAddVariant = async (req, res, next) => {
   } catch (error) {
     if (error.details) {
       const message = error.details.map((e) => e.message).join(", ");
-      return next(new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST));
+      return next(
+        new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST),
+      );
     }
-    return next(new ApiError(error.message || "Validation failed", HTTP_STATUS.BAD_REQUEST));
+    return next(
+      new ApiError(
+        error.message || "Validation failed",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
   }
 };
 
@@ -229,7 +248,11 @@ exports.validateUpdateVariant = async (req, res, next) => {
         material: joi.string().trim().allow("").optional(),
         weight: joi.number().min(0).optional(),
         price: joi.number().optional(),
-        discountType: joi.string().valid("percentage", "fixed").allow(null).optional(),
+        discountType: joi
+          .string()
+          .valid("percentage", "fixed")
+          .allow(null)
+          .optional(),
         discountValue: joi.number().min(0).optional(),
         stock: joi.number().min(0).optional(),
         isActive: joi.boolean().optional(),
@@ -246,8 +269,15 @@ exports.validateUpdateVariant = async (req, res, next) => {
   } catch (error) {
     if (error.details) {
       const message = error.details.map((e) => e.message).join(", ");
-      return next(new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST));
+      return next(
+        new ApiError("Validation error: " + message, HTTP_STATUS.BAD_REQUEST),
+      );
     }
-    return next(new ApiError(error.message || "Validation failed", HTTP_STATUS.BAD_REQUEST));
+    return next(
+      new ApiError(
+        error.message || "Validation failed",
+        HTTP_STATUS.BAD_REQUEST,
+      ),
+    );
   }
 };

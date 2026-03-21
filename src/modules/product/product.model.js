@@ -10,8 +10,8 @@ const variantSchema = new mongoose.Schema(
     sku: { type: String, default: "", trim: true },
 
     // Attributes
-    color: { type: String, required: true, trim: true },  // required
-    size: { type: String, required: true, trim: true },   // required
+    color: { type: String, required: true, trim: true }, // required
+    size: { type: String, required: true, trim: true }, // required
     material: { type: String, default: "", trim: true },
     weight: { type: Number, default: 0 },
 
@@ -23,7 +23,7 @@ const variantSchema = new mongoose.Schema(
       default: null,
     },
     discountValue: { type: Number, default: 0 },
-    finalPrice: { type: Number, default: 0 },            // auto-calculated
+    finalPrice: { type: Number, default: 0 }, // auto-calculated
 
     // Stock
     stock: { type: Number, default: 0 },
@@ -57,7 +57,7 @@ const productSchema = new mongoose.Schema(
 
     brand: { type: String, default: "" }, // Legacy plain text
     sku: { type: String, required: true },
-    color: [{ type: String, default: "", required: true }],
+    color: [{ type: String, default: "", required: false }],
     size: [{ type: String, default: "" }],
 
     shortDescription: { type: String, default: "" },
