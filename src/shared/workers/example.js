@@ -1,4 +1,476 @@
-// shared/workers/image.worker.js
+// // shared/workers/image.worker.js
+// require("module-alias/register");
+
+// const { Worker } = require("bullmq");
+// const fs = require("fs/promises");
+// const path = require("path");
+
+// const { IMAGE_QUEUE_NAME } = require("@/shared/queues/image.queue");
+// const { connection } = require("@/shared/config/redis.config");
+// const {
+//   cloudinaryFileUpload,
+//   deleteCloudinaryFile,
+// } = require("@/shared/config/cloudinary.config");
+
+// const categoryModel = require("@/modules/categories/categories.model");
+// const productModel = require("@/modules/product/product.model");
+// const brandModel = require("@/modules/brand/brand.model");
+// const { connectDatabase } = require("../config/db.config");
+// const { bumpNsVersion } = require("../utils/cache.util");
+
+// connectDatabase().then(() => {
+//   const worker = new Worker(
+//     IMAGE_QUEUE_NAME,
+//     async (job) => {
+//       if (job.name === "upload-category-image") {
+//         return handleCreateCategoryImage(job);
+//       }
+
+//       if (job.name === "update-category-image") {
+//         return handleUpdateCategoryImage(job);
+//       }
+//       if (job.name === "delete-category-image") {
+//         return handleDeleteCategoryImage(job);
+//       }
+//       // product job
+//       if (job.name == "upload-product-image") {
+//         return handleCreateProductImage(job);
+//       }
+//       if (job.name == "delete-product-image") {
+//         return handleDeleteProductImage(job);
+//       }
+//       if (job.name == "delete-product") {
+//         return handleDeleteProductImage(job);
+//       }
+
+//       // brand jobs
+//       if (job.name === "upload-brand-image") {
+//         return handleCreateBrandImage(job);
+//       }
+//       if (job.name === "update-brand-image") {
+//         return handleUpdateBrandImage(job);
+//       }
+//       if (job.name === "delete-brand-image") {
+//         return handleDeleteBrandImage(job);
+//       }
+
+//       // unknown job
+//       return null;
+//     },
+//     { connection, concurrency: 3 },
+//   );
+
+//   worker.on("ready", () => console.log("✅ Image Worker ready"));
+//   worker.on("active", (job) => console.log("▶️ Job active:", job.id, job.name));
+//   worker.on("completed", (job) =>
+//     console.log("✅ Job completed:", job.id, job.name),
+//   );
+//   worker.on("failed", (job, err) =>
+//     console.log("❌ Job failed:", job?.id, err),
+//   );
+//   worker.on("error", (err) => console.log("🔥 Worker error:", err));
+// });
+
+// /** ----- Create Category Image ----- */
+// async function handleCreateCategoryImage(job) {
+//   const { categoryId, localPath } = job.data;
+//   const absPath = path.resolve(localPath);
+
+//   await categoryModel.findByIdAndUpdate(categoryId, {
+//     "image.status": "processing",
+//     "image.localPath": localPath,
+//     "image.tries": job.attemptsMade,
+//   });
+
+//   try {
+//     const uploaded = await cloudinaryFileUpload(absPath);
+
+//     await categoryModel.findByIdAndUpdate(categoryId, {
+//       "image.url": uploaded.secure_url,
+//       "image.publicId": uploaded.public_id,
+//       "image.status": "uploaded",
+//       "image.lastError": "",
+//       "image.tries": job.attemptsMade + 1,
+//       "seo.ogImage": uploaded.secure_url,
+//     });
+
+//     await fs.unlink(absPath).catch(() => null);
+//     // invalidate category cache
+//     await bumpNsVersion("category");
+//     return { categoryId, imageUrl: uploaded.secure_url };
+//   } catch (err) {
+//     await categoryModel.findByIdAndUpdate(categoryId, {
+//       "image.status": "failed",
+//       "image.tries": job.attemptsMade + 1,
+//       "image.lastError": err?.message || "Upload failed",
+//       "image.localPath": localPath,
+//     });
+
+//     // invalidate category cache
+//     await bumpNsVersion("category");
+//     throw err;
+//   } finally {
+//     if (job.attemptsMade >= 2) {
+//       await fs.unlink(absPath).catch(() => null);
+//     }
+//   }
+// }
+
+// /** ----- Update Category Image (upload new + delete old) ----- */
+// async function handleUpdateCategoryImage(job) {
+//   const { categoryId, localPath, oldPublicId } = job.data;
+//   const absPath = path.resolve(localPath);
+
+//   // processing
+//   await categoryModel.findByIdAndUpdate(categoryId, {
+//     "image.status": "processing",
+//     "image.localPath": localPath,
+//     "image.tries": job.attemptsMade,
+//   });
+
+//   try {
+//     // upload new
+//     const uploaded = await cloudinaryFileUpload(absPath);
+
+//     //  prevent race: only update if still same localPath
+//     const updated = await categoryModel.findOneAndUpdate(
+//       { _id: categoryId, "image.localPath": localPath },
+//       {
+//         $set: {
+//           "image.url": uploaded.secure_url,
+//           "image.publicId": uploaded.public_id,
+//           "image.status": "uploaded",
+//           "image.lastError": "",
+//           "image.tries": job.attemptsMade + 1,
+//           "seo.ogImage": uploaded.secure_url,
+//         },
+//       },
+//       { new: true },
+//     );
+
+//     // if newer update came, skip delete
+//     if (!updated) {
+//       await fs.unlink(absPath).catch(() => null);
+//       return { categoryId, skipped: true };
+//     }
+
+//     // delete old after success
+//     if (oldPublicId && oldPublicId !== uploaded.public_id) {
+//       await deleteCloudinaryFile(oldPublicId);
+//     }
+//     // invalidate category cache
+//     await bumpNsVersion("category");
+//     await fs.unlink(absPath).catch(() => null);
+//     return { categoryId, imageUrl: uploaded.secure_url };
+//   } catch (err) {
+//     await categoryModel.findByIdAndUpdate(categoryId, {
+//       "image.status": "failed",
+//       "image.tries": job.attemptsMade + 1,
+//       "image.lastError": err?.message || "Upload failed",
+//       "image.localPath": localPath,
+//     });
+//     // invalidate category cache
+//     await bumpNsVersion("category");
+
+//     throw err;
+//   } finally {
+//     if (job.attemptsMade >= 2) {
+//       await fs.unlink(absPath).catch(() => null);
+//     }
+//   }
+// }
+
+// // delete category image
+// async function handleDeleteCategoryImage(job) {
+//   try {
+//     const { categoryId, publicId } = job.data;
+//     const deleted = await deleteCloudinaryFile(publicId);
+//     await categoryModel.deleteOne({ _id: categoryId });
+//     console.log("Deleted Category:", deleted);
+//     // invalidate category cache
+//     await bumpNsVersion("category");
+//     return deleted;
+//   } catch (error) {
+//     // invalidate category cache
+//     await bumpNsVersion("category");
+//     console.log("error from deleted category image", error);
+//     throw error;
+//   }
+// }
+
+// // create product image job
+// async function handleCreateProductImage(job) {
+//   const { productId, images = [] } = job.data;
+
+//   if (!productId) throw new Error("productId is required");
+//   if (!Array.isArray(images) || images.length === 0) {
+//     return { productId, uploadedCount: 0, images: [] };
+//   }
+
+//   const results = [];
+
+//   for (const img of images) {
+//     const absPath = path.resolve(img.path);
+
+//     try {
+//       const uploaded = await cloudinaryFileUpload(absPath);
+
+//       // push new image object into image array
+//       await productModel.findOneAndUpdate(
+//         { _id: productId },
+//         {
+//           $push: {
+//             image: {
+//               url: uploaded.secure_url,
+//               publicId: uploaded.public_id,
+//               optimized_url: uploaded.optimized_url,
+//               status: "uploaded",
+//               localPath: "",
+//               tries: job.attemptsMade + 1,
+//               lastError: "",
+//             },
+//           },
+//         },
+//         { returnDocument: "after" },
+//       );
+//       console.log("updated image on product db");
+//       results.push({ url: uploaded.secure_url, publicId: uploaded.public_id });
+//       await bumpNsVersion("product");
+
+//       // cleanup local file
+//       await fs.unlink(absPath).catch(() => null);
+//     } catch (error) {
+//       // push failed image info too (optional but useful)
+//       await productModel.findOneAndUpdate(
+//         { _id: productId },
+//         {
+//           $push: {
+//             image: {
+//               url: "",
+//               publicId: "",
+//               status: "failed",
+//               localPath: img.path,
+//               tries: job.attemptsMade + 1,
+//               lastError: error?.message || "Upload failed",
+//             },
+//           },
+//         },
+//       );
+//       await bumpNsVersion("product");
+
+//       await fs.unlink(absPath).catch(() => null);
+//       // continue next image (don’t stop whole batch)
+//       continue;
+//     }
+//   }
+
+//   return { productId, uploadedCount: results.length, images: results };
+// }
+
+// // handleDeleteProductImage
+// async function handleDeleteProductImage(job) {
+//   const { productId, images } = job.data;
+
+//   if (!productId) throw new Error("productId is required");
+
+//   // normalize ids
+//   const publicIds = Array.isArray(images)
+//     ? [...new Set(images.filter(Boolean).map(String))]
+//     : [];
+
+//   if (publicIds.length === 0) {
+//     return { productId, deletedCount: 0, images: [], failed: [] };
+//   }
+
+//   // (optional) quick existence check (cheap)
+//   const exists = await productModel.exists({ _id: productId });
+//   if (!exists) {
+//     return { productId, deletedCount: 0, images: [], failed: publicIds };
+//   }
+
+//   // --- delete in parallel with a small concurrency limit
+//   const concurrency = 5;
+//   const deleted = [];
+//   const failed = [];
+
+//   for (let i = 0; i < publicIds.length; i += concurrency) {
+//     const batch = publicIds.slice(i, i + concurrency);
+
+//     const results = await Promise.allSettled(
+//       batch.map((id) => deleteCloudinaryFile(id)),
+//     );
+
+//     results.forEach((r, idx) => {
+//       const id = batch[idx];
+//       if (r.status === "fulfilled" && r.value) deleted.push(id);
+//       else failed.push(id);
+//     });
+//   }
+
+//   // --- only remove from DB what actually deleted from Cloudinary
+//   if (deleted.length > 0) {
+//     await productModel.updateOne(
+//       { _id: productId },
+//       { $pull: { image: { publicId: { $in: deleted } } } },
+//     );
+//   }
+//   await bumpNsVersion("product");
+
+//   return {
+//     productId,
+//     requestedCount: publicIds.length,
+//     deletedCount: deleted.length,
+//     images: deleted, // deleted publicIds
+//     failed, // failed publicIds
+//   };
+// }
+
+// // handleDeleteProductImage
+// async function handleDeleteProductImage(job) {
+//   const { productId, images } = job.data;
+
+//   if (!productId) throw new Error("productId is required");
+//   const product = await productModel.findOneAndDelete({ _id: productId });
+//   if (!product) throw new Error("Product not found");
+//   for (let obj of images) {
+//     await deleteCloudinaryFile(obj.publicId);
+//   }
+//   await bumpNsVersion("product");
+
+//   return { productId, deletedCount: images.length, images };
+// }
+
+// // ═══════════════════════════════════════════════════════════════════════════════
+// //  BRAND HANDLERS
+// // ═══════════════════════════════════════════════════════════════════════════════
+
+// /** Create brand — upload image to Cloudinary then update brand in DB */
+// async function handleCreateBrandImage(job) {
+//   const { brandId, localPath } = job.data;
+//   const absPath = path.resolve(localPath);
+
+//   // mark as processing
+//   await brandModel.findByIdAndUpdate(brandId, {
+//     "image.status": "processing",
+//     "image.localPath": localPath,
+//     "image.tries": job.attemptsMade,
+//   });
+
+//   try {
+//     // 1) upload to Cloudinary
+//     const uploaded = await cloudinaryFileUpload(absPath);
+
+//     // 2) update brand doc with Cloudinary URL
+//     await brandModel.findByIdAndUpdate(brandId, {
+//       "image.url": uploaded.secure_url,
+//       "image.publicId": uploaded.public_id,
+//       "image.status": "uploaded",
+//       "image.lastError": "",
+//       "image.tries": job.attemptsMade + 1,
+//     });
+
+//     // 3) delete local temp file
+//     await fs.unlink(absPath).catch(() => null);
+
+//     // 4) invalidate brand cache
+//     await bumpNsVersion("brand");
+
+//     return { brandId, imageUrl: uploaded.secure_url };
+//   } catch (err) {
+//     await brandModel.findByIdAndUpdate(brandId, {
+//       "image.status": "failed",
+//       "image.tries": job.attemptsMade + 1,
+//       "image.lastError": err?.message || "Upload failed",
+//       "image.localPath": localPath,
+//     });
+
+//     await bumpNsVersion("brand");
+//     throw err; // BullMQ will retry based on attempts/backoff config
+//   } finally {
+//     // after max retries — remove local file to free disk
+//     if (job.attemptsMade >= 2) {
+//       await fs.unlink(absPath).catch(() => null);
+//     }
+//   }
+// }
+
+// /** Update brand image — upload new, delete old from Cloudinary */
+// async function handleUpdateBrandImage(job) {
+//   const { brandId, localPath, oldPublicId } = job.data;
+//   const absPath = path.resolve(localPath);
+
+//   await brandModel.findByIdAndUpdate(brandId, {
+//     "image.status": "processing",
+//     "image.localPath": localPath,
+//     "image.tries": job.attemptsMade,
+//   });
+
+//   try {
+//     // 1) upload new image
+//     const uploaded = await cloudinaryFileUpload(absPath);
+
+//     // 2) race-safe: only apply if no newer update came in
+//     const updated = await brandModel.findOneAndUpdate(
+//       { _id: brandId, "image.localPath": localPath },
+//       {
+//         $set: {
+//           "image.url": uploaded.secure_url,
+//           "image.publicId": uploaded.public_id,
+//           "image.status": "uploaded",
+//           "image.lastError": "",
+//           "image.tries": job.attemptsMade + 1,
+//         },
+//       },
+//       { new: true },
+//     );
+
+//     if (!updated) {
+//       await fs.unlink(absPath).catch(() => null);
+//       return { brandId, skipped: true };
+//     }
+
+//     // 3) delete old Cloudinary image
+//     if (oldPublicId && oldPublicId !== uploaded.public_id) {
+//       await deleteCloudinaryFile(oldPublicId);
+//     }
+
+//     await fs.unlink(absPath).catch(() => null);
+//     await bumpNsVersion("brand");
+//     return { brandId, imageUrl: uploaded.secure_url };
+//   } catch (err) {
+//     await brandModel.findByIdAndUpdate(brandId, {
+//       "image.status": "failed",
+//       "image.tries": job.attemptsMade + 1,
+//       "image.lastError": err?.message || "Upload failed",
+//       "image.localPath": localPath,
+//     });
+
+//     await bumpNsVersion("brand");
+//     throw err;
+//   } finally {
+//     if (job.attemptsMade >= 2) {
+//       await fs.unlink(absPath).catch(() => null);
+//     }
+//   }
+// }
+
+// /** Delete brand image — remove from Cloudinary (doc already deleted in service) */
+// async function handleDeleteBrandImage(job) {
+//   try {
+//     const { oldPublicId } = job.data;
+//     if (oldPublicId) {
+//       await deleteCloudinaryFile(oldPublicId);
+//     }
+//     await bumpNsVersion("brand");
+//     return { deleted: true, oldPublicId };
+//   } catch (err) {
+//     await bumpNsVersion("brand");
+//     console.error("❌ Delete brand image error:", err);
+//     throw err;
+//   }
+// }
+
+
 require("module-alias/register");
 
 const { Worker } = require("bullmq");
@@ -13,8 +485,9 @@ const {
 } = require("@/shared/config/cloudinary.config");
 
 const categoryModel = require("@/modules/categories/categories.model");
-const productModel = require("@/modules/product/product.model");
 const brandModel = require("@/modules/brand/brand.model");
+const productModel = require("@/modules/product/product.model");
+const bannerModel = require("@/modules/banner/banner.model");
 const { connectDatabase } = require("../config/db.config");
 const { bumpNsVersion } = require("../utils/cache.util");
 
@@ -22,46 +495,46 @@ connectDatabase().then(() => {
   const worker = new Worker(
     IMAGE_QUEUE_NAME,
     async (job) => {
-      if (job.name === "upload-category-image") {
+      // ── Category jobs ────────────────────────────────────────────────────────
+      if (job.name === "upload-category-image")
         return handleCreateCategoryImage(job);
-      }
-
-      if (job.name === "update-category-image") {
+      if (job.name === "update-category-image")
         return handleUpdateCategoryImage(job);
-      }
-      if (job.name === "delete-category-image") {
+      if (job.name === "delete-category-image")
         return handleDeleteCategoryImage(job);
-      }
-      // product job
-      if (job.name == "upload-product-image") {
-        return handleCreateProductImage(job);
-      }
-      if (job.name == "delete-product-image") {
-        return handleDeleteProductImage(job);
-      }
-      if (job.name == "delete-product") {
-        return handleDeleteProductImage(job);
-      }
 
-      // brand jobs
-      if (job.name === "upload-brand-image") {
+      // ── Brand jobs ───────────────────────────────────────────────────────────
+      if (job.name === "upload-brand-image")
         return handleCreateBrandImage(job);
-      }
-      if (job.name === "update-brand-image") {
+      if (job.name === "update-brand-image")
         return handleUpdateBrandImage(job);
-      }
-      if (job.name === "delete-brand-image") {
+      if (job.name === "delete-brand-image")
         return handleDeleteBrandImage(job);
-      }
 
-      // unknown job
+      // ── Product jobs ────────────────────────────────────────────────────────
+      if (job.name === "upload-product-image")
+        return handleCreateProductImage(job);
+      if (job.name === "delete-product-image")
+        return handleDeleteProductImage(job);
+      if (job.name === "delete-product")
+        return handleDeleteFullProduct(job);
+
+      // ── Banner jobs ─────────────────────────────────────────────────────────
+      if (job.name === "upload-banner-image")
+        return handleCreateBannerImage(job);
+      if (job.name === "update-banner-image")
+        return handleUpdateBannerImage(job);
+      if (job.name === "delete-banner-image")
+        return handleDeleteBannerImage(job);
+
+      // unknown job — skip silently
       return null;
     },
     { connection, concurrency: 3 },
   );
 
   worker.on("ready", () => console.log("✅ Image Worker ready"));
-  worker.on("active", (job) => console.log("▶️ Job active:", job.id, job.name));
+  worker.on("active", (job) => console.log("▶️  Job active:", job.id, job.name));
   worker.on("completed", (job) =>
     console.log("✅ Job completed:", job.id, job.name),
   );
@@ -71,7 +544,11 @@ connectDatabase().then(() => {
   worker.on("error", (err) => console.log("🔥 Worker error:", err));
 });
 
-/** ----- Create Category Image ----- */
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CATEGORY HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Create — upload image then update DB */
 async function handleCreateCategoryImage(job) {
   const { categoryId, localPath } = job.data;
   const absPath = path.resolve(localPath);
@@ -95,7 +572,6 @@ async function handleCreateCategoryImage(job) {
     });
 
     await fs.unlink(absPath).catch(() => null);
-    // invalidate category cache
     await bumpNsVersion("category");
     return { categoryId, imageUrl: uploaded.secure_url };
   } catch (err) {
@@ -106,7 +582,6 @@ async function handleCreateCategoryImage(job) {
       "image.localPath": localPath,
     });
 
-    // invalidate category cache
     await bumpNsVersion("category");
     throw err;
   } finally {
@@ -116,12 +591,11 @@ async function handleCreateCategoryImage(job) {
   }
 }
 
-/** ----- Update Category Image (upload new + delete old) ----- */
+/** Update — upload new, delete old from Cloudinary */
 async function handleUpdateCategoryImage(job) {
   const { categoryId, localPath, oldPublicId } = job.data;
   const absPath = path.resolve(localPath);
 
-  // processing
   await categoryModel.findByIdAndUpdate(categoryId, {
     "image.status": "processing",
     "image.localPath": localPath,
@@ -129,10 +603,9 @@ async function handleUpdateCategoryImage(job) {
   });
 
   try {
-    // upload new
     const uploaded = await cloudinaryFileUpload(absPath);
 
-    //  prevent race: only update if still same localPath
+    // race-safe: only update if this job's localPath is still the current one
     const updated = await categoryModel.findOneAndUpdate(
       { _id: categoryId, "image.localPath": localPath },
       {
@@ -148,19 +621,17 @@ async function handleUpdateCategoryImage(job) {
       { new: true },
     );
 
-    // if newer update came, skip delete
     if (!updated) {
       await fs.unlink(absPath).catch(() => null);
       return { categoryId, skipped: true };
     }
 
-    // delete old after success
     if (oldPublicId && oldPublicId !== uploaded.public_id) {
       await deleteCloudinaryFile(oldPublicId);
     }
-    // invalidate category cache
-    await bumpNsVersion("category");
+
     await fs.unlink(absPath).catch(() => null);
+    await bumpNsVersion("category");
     return { categoryId, imageUrl: uploaded.secure_url };
   } catch (err) {
     await categoryModel.findByIdAndUpdate(categoryId, {
@@ -169,9 +640,8 @@ async function handleUpdateCategoryImage(job) {
       "image.lastError": err?.message || "Upload failed",
       "image.localPath": localPath,
     });
-    // invalidate category cache
-    await bumpNsVersion("category");
 
+    await bumpNsVersion("category");
     throw err;
   } finally {
     if (job.attemptsMade >= 2) {
@@ -180,164 +650,20 @@ async function handleUpdateCategoryImage(job) {
   }
 }
 
-// delete category image
+/** Delete — remove image from Cloudinary (document already deleted in service) */
 async function handleDeleteCategoryImage(job) {
   try {
-    const { categoryId, publicId } = job.data;
-    const deleted = await deleteCloudinaryFile(publicId);
-    await categoryModel.deleteOne({ _id: categoryId });
-    console.log("Deleted Category:", deleted);
-    // invalidate category cache
-    await bumpNsVersion("category");
-    return deleted;
-  } catch (error) {
-    // invalidate category cache
-    await bumpNsVersion("category");
-    console.log("error from deleted category image", error);
-    throw error;
-  }
-}
-
-// create product image job
-async function handleCreateProductImage(job) {
-  const { productId, images = [] } = job.data;
-
-  if (!productId) throw new Error("productId is required");
-  if (!Array.isArray(images) || images.length === 0) {
-    return { productId, uploadedCount: 0, images: [] };
-  }
-
-  const results = [];
-
-  for (const img of images) {
-    const absPath = path.resolve(img.path);
-
-    try {
-      const uploaded = await cloudinaryFileUpload(absPath);
-
-      // push new image object into image array
-      await productModel.findOneAndUpdate(
-        { _id: productId },
-        {
-          $push: {
-            image: {
-              url: uploaded.secure_url,
-              publicId: uploaded.public_id,
-              optimized_url: uploaded.optimized_url,
-              status: "uploaded",
-              localPath: "",
-              tries: job.attemptsMade + 1,
-              lastError: "",
-            },
-          },
-        },
-        { returnDocument: "after" },
-      );
-      console.log("updated image on product db");
-      results.push({ url: uploaded.secure_url, publicId: uploaded.public_id });
-      await bumpNsVersion("product");
-
-      // cleanup local file
-      await fs.unlink(absPath).catch(() => null);
-    } catch (error) {
-      // push failed image info too (optional but useful)
-      await productModel.findOneAndUpdate(
-        { _id: productId },
-        {
-          $push: {
-            image: {
-              url: "",
-              publicId: "",
-              status: "failed",
-              localPath: img.path,
-              tries: job.attemptsMade + 1,
-              lastError: error?.message || "Upload failed",
-            },
-          },
-        },
-      );
-      await bumpNsVersion("product");
-
-      await fs.unlink(absPath).catch(() => null);
-      // continue next image (don’t stop whole batch)
-      continue;
+    const { oldPublicId } = job.data;
+    if (oldPublicId) {
+      await deleteCloudinaryFile(oldPublicId);
     }
+    await bumpNsVersion("category");
+    return { deleted: true, oldPublicId };
+  } catch (err) {
+    await bumpNsVersion("category");
+    console.error("❌ Delete category image error:", err);
+    throw err;
   }
-
-  return { productId, uploadedCount: results.length, images: results };
-}
-
-// handleDeleteProductImage
-async function handleDeleteProductImage(job) {
-  const { productId, images } = job.data;
-
-  if (!productId) throw new Error("productId is required");
-
-  // normalize ids
-  const publicIds = Array.isArray(images)
-    ? [...new Set(images.filter(Boolean).map(String))]
-    : [];
-
-  if (publicIds.length === 0) {
-    return { productId, deletedCount: 0, images: [], failed: [] };
-  }
-
-  // (optional) quick existence check (cheap)
-  const exists = await productModel.exists({ _id: productId });
-  if (!exists) {
-    return { productId, deletedCount: 0, images: [], failed: publicIds };
-  }
-
-  // --- delete in parallel with a small concurrency limit
-  const concurrency = 5;
-  const deleted = [];
-  const failed = [];
-
-  for (let i = 0; i < publicIds.length; i += concurrency) {
-    const batch = publicIds.slice(i, i + concurrency);
-
-    const results = await Promise.allSettled(
-      batch.map((id) => deleteCloudinaryFile(id)),
-    );
-
-    results.forEach((r, idx) => {
-      const id = batch[idx];
-      if (r.status === "fulfilled" && r.value) deleted.push(id);
-      else failed.push(id);
-    });
-  }
-
-  // --- only remove from DB what actually deleted from Cloudinary
-  if (deleted.length > 0) {
-    await productModel.updateOne(
-      { _id: productId },
-      { $pull: { image: { publicId: { $in: deleted } } } },
-    );
-  }
-  await bumpNsVersion("product");
-
-  return {
-    productId,
-    requestedCount: publicIds.length,
-    deletedCount: deleted.length,
-    images: deleted, // deleted publicIds
-    failed, // failed publicIds
-  };
-}
-
-// handleDeleteProductImage
-async function handleDeleteProductImage(job) {
-  const { productId, images } = job.data;
-
-  if (!productId) throw new Error("productId is required");
-  const product = await productModel.findOneAndDelete({ _id: productId });
-  if (!product) throw new Error("Product not found");
-  for (let obj of images) {
-    await deleteCloudinaryFile(obj.publicId);
-  }
-  await bumpNsVersion("product");
-
-  return { productId, deletedCount: images.length, images };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -360,7 +686,7 @@ async function handleCreateBrandImage(job) {
     // 1) upload to Cloudinary
     const uploaded = await cloudinaryFileUpload(absPath);
 
-    // 2) update brand doc with Cloudinary URL
+    // 2) update brand with cloudinary URL
     await brandModel.findByIdAndUpdate(brandId, {
       "image.url": uploaded.secure_url,
       "image.publicId": uploaded.public_id,
@@ -369,7 +695,7 @@ async function handleCreateBrandImage(job) {
       "image.tries": job.attemptsMade + 1,
     });
 
-    // 3) delete local temp file
+    // 3) clean up local temp file
     await fs.unlink(absPath).catch(() => null);
 
     // 4) invalidate brand cache
@@ -387,18 +713,19 @@ async function handleCreateBrandImage(job) {
     await bumpNsVersion("brand");
     throw err; // BullMQ will retry based on attempts/backoff config
   } finally {
-    // after max retries — remove local file to free disk
+    // after max retries — remove local file to save disk space
     if (job.attemptsMade >= 2) {
       await fs.unlink(absPath).catch(() => null);
     }
   }
 }
 
-/** Update brand image — upload new, delete old from Cloudinary */
+/** Update brand image — upload new image, delete old from Cloudinary */
 async function handleUpdateBrandImage(job) {
   const { brandId, localPath, oldPublicId } = job.data;
   const absPath = path.resolve(localPath);
 
+  // mark as processing
   await brandModel.findByIdAndUpdate(brandId, {
     "image.status": "processing",
     "image.localPath": localPath,
@@ -409,7 +736,7 @@ async function handleUpdateBrandImage(job) {
     // 1) upload new image
     const uploaded = await cloudinaryFileUpload(absPath);
 
-    // 2) race-safe: only apply if no newer update came in
+    // 2) race-safe update: only apply if this job's localPath is still current
     const updated = await brandModel.findOneAndUpdate(
       { _id: brandId, "image.localPath": localPath },
       {
@@ -424,18 +751,21 @@ async function handleUpdateBrandImage(job) {
       { new: true },
     );
 
+    // if a newer update came in while this job was running — skip old delete
     if (!updated) {
       await fs.unlink(absPath).catch(() => null);
       return { brandId, skipped: true };
     }
 
-    // 3) delete old Cloudinary image
+    // 3) delete old Cloudinary image (only if different publicId)
     if (oldPublicId && oldPublicId !== uploaded.public_id) {
       await deleteCloudinaryFile(oldPublicId);
     }
 
+    // 4) clean up temp file & invalidate cache
     await fs.unlink(absPath).catch(() => null);
     await bumpNsVersion("brand");
+
     return { brandId, imageUrl: uploaded.secure_url };
   } catch (err) {
     await brandModel.findByIdAndUpdate(brandId, {
@@ -454,7 +784,7 @@ async function handleUpdateBrandImage(job) {
   }
 }
 
-/** Delete brand image — remove from Cloudinary (doc already deleted in service) */
+/** Delete brand image — remove from Cloudinary (document already deleted in service) */
 async function handleDeleteBrandImage(job) {
   try {
     const { oldPublicId } = job.data;
@@ -466,6 +796,202 @@ async function handleDeleteBrandImage(job) {
   } catch (err) {
     await bumpNsVersion("brand");
     console.error("❌ Delete brand image error:", err);
+    throw err;
+  }
+}
+// ═══════════════════════════════════════════════════════════════════════════════
+//  PRODUCT HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Create Product Image — batch upload to top-level */
+async function handleCreateProductImage(job) {
+  const { productId, images = [] } = job.data;
+  if (!productId || !images.length) return { productId, uploadedCount: 0 };
+
+  const results = [];
+  for (const img of images) {
+    const absPath = path.resolve(img.path);
+    try {
+      const uploaded = await cloudinaryFileUpload(absPath);
+      const imgData = {
+        url: uploaded.secure_url,
+        publicId: uploaded.public_id,
+        optimized_url: uploaded.optimized_url || uploaded.secure_url,
+        status: "uploaded",
+        tries: job.attemptsMade + 1,
+      };
+
+      // Update top-level product image
+      await productModel.findByIdAndUpdate(productId, {
+        $push: { image: imgData }
+      });
+
+      results.push(uploaded.secure_url);
+      await fs.unlink(absPath).catch(() => null);
+    } catch (err) {
+      console.error("❌ Product image upload failed:", err);
+      await fs.unlink(absPath).catch(() => null);
+    }
+  }
+
+  await bumpNsVersion("product");
+  return { productId, uploadedCount: results.length };
+}
+
+/** Delete Product Image — remove specific publicIds */
+async function handleDeleteProductImage(job) {
+  const { productId, images = [] } = job.data; // images is array of publicIds
+  if (!productId || !images.length) return { deleted: 0 };
+
+  for (const publicId of images) {
+    try {
+      if (publicId) await deleteCloudinaryFile(publicId);
+    } catch (err) {
+      console.error("❌ Delete product image helper error:", err);
+    }
+  }
+
+  // Remove from DB (top-level only)
+  await productModel.findByIdAndUpdate(productId, {
+    $pull: { image: { publicId: { $in: images } } }
+  });
+
+  await bumpNsVersion("product");
+  return { deleted: images.length };
+}
+
+/** Delete Full Product — remove all images and the doc */
+async function handleDeleteFullProduct(job) {
+  const { productId, images = [] } = job.data;
+  
+  // 1) Delete doc
+  await productModel.findByIdAndDelete(productId);
+
+  // 2) Delete all images (top-level provided in job, but we should also check variants)
+  // In a real scenario, we might want to fetch the doc first to get ALL publicIds
+  for (const img of images) {
+    if (img.publicId) await deleteCloudinaryFile(img.publicId).catch(() => null);
+  }
+
+  await bumpNsVersion("product");
+  return { productId, deleted: true };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BANNER HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** Create banner — upload image then update DB */
+async function handleCreateBannerImage(job) {
+  const { bannerId, localPath } = job.data;
+  const absPath = path.resolve(localPath);
+
+  await bannerModel.findByIdAndUpdate(bannerId, {
+    "image.status": "processing",
+    "image.localPath": localPath,
+    "image.tries": job.attemptsMade,
+  });
+
+  try {
+    const uploaded = await cloudinaryFileUpload(absPath);
+
+    await bannerModel.findByIdAndUpdate(bannerId, {
+      "image.url": uploaded.secure_url,
+      "image.publicId": uploaded.public_id,
+      "image.status": "uploaded",
+      "image.lastError": "",
+      "image.tries": job.attemptsMade + 1,
+    });
+
+    await fs.unlink(absPath).catch(() => null);
+    await bumpNsVersion("banner");
+    return { bannerId, imageUrl: uploaded.secure_url };
+  } catch (err) {
+    await bannerModel.findByIdAndUpdate(bannerId, {
+      "image.status": "failed",
+      "image.tries": job.attemptsMade + 1,
+      "image.lastError": err?.message || "Upload failed",
+      "image.localPath": localPath,
+    });
+
+    await bumpNsVersion("banner");
+    throw err;
+  } finally {
+    if (job.attemptsMade >= 2) {
+      await fs.unlink(absPath).catch(() => null);
+    }
+  }
+}
+
+/** Update banner — upload new, delete old from Cloudinary */
+async function handleUpdateBannerImage(job) {
+  const { bannerId, localPath, oldPublicId } = job.data;
+  const absPath = path.resolve(localPath);
+
+  await bannerModel.findByIdAndUpdate(bannerId, {
+    "image.status": "processing",
+    "image.localPath": localPath,
+    "image.tries": job.attemptsMade,
+  });
+
+  try {
+    const uploaded = await cloudinaryFileUpload(absPath);
+
+    const updated = await bannerModel.findOneAndUpdate(
+      { _id: bannerId, "image.localPath": localPath },
+      {
+        $set: {
+          "image.url": uploaded.secure_url,
+          "image.publicId": uploaded.public_id,
+          "image.status": "uploaded",
+          "image.lastError": "",
+          "image.tries": job.attemptsMade + 1,
+        },
+      },
+      { new: true },
+    );
+
+    if (!updated) {
+      await fs.unlink(absPath).catch(() => null);
+      return { bannerId, skipped: true };
+    }
+
+    if (oldPublicId && oldPublicId !== uploaded.public_id) {
+      await deleteCloudinaryFile(oldPublicId);
+    }
+
+    await fs.unlink(absPath).catch(() => null);
+    await bumpNsVersion("banner");
+    return { bannerId, imageUrl: uploaded.secure_url };
+  } catch (err) {
+    await bannerModel.findByIdAndUpdate(bannerId, {
+      "image.status": "failed",
+      "image.tries": job.attemptsMade + 1,
+      "image.lastError": err?.message || "Upload failed",
+      "image.localPath": localPath,
+    });
+
+    await bumpNsVersion("banner");
+    throw err;
+  } finally {
+    if (job.attemptsMade >= 2) {
+      await fs.unlink(absPath).catch(() => null);
+    }
+  }
+}
+
+/** Delete banner image — remove from Cloudinary */
+async function handleDeleteBannerImage(job) {
+  try {
+    const { oldPublicId } = job.data;
+    if (oldPublicId) {
+      await deleteCloudinaryFile(oldPublicId);
+    }
+    await bumpNsVersion("banner");
+    return { deleted: true, oldPublicId };
+  } catch (err) {
+    await bumpNsVersion("banner");
+    console.error("❌ Delete banner image error:", err);
     throw err;
   }
 }

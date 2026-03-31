@@ -6,5 +6,6 @@ _.use("/brand", require("@/modules/brand/brand.routes"));
 _.use("/product", require("@/modules/product/product.routes"));
 _.use("/order", require("@/modules/order/order.route"));
 _.use("/contact", require("@/modules/contactMessage/contact.routes"));
+_.use("/banner", require("@/modules/banner/banner.routes"));
 
 module.exports = _;
